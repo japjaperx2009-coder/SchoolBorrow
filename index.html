@@ -1,0 +1,217 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SchoolBorrow | Management System</title>
+    <link rel="stylesheet" href="assets/style.css">
+</head>
+<body class="logged-out">
+
+    <!-- LOGIN PAGE -->
+    <div id="login-screen" class="login-screen">
+        <div class="login-card">
+            <div class="login-icon">🏫</div>
+            <h1>SchoolBorrow</h1>
+            <p class="login-subtitle">School Borrowing Management System</p>
+
+            <h2>Administrator Login</h2>
+
+            <form id="login-form">
+                <label for="username">Username</label>
+                <input type="text" id="username"
+                    placeholder="Enter username" required>
+
+                <label for="password">Password</label>
+                <input type="password" id="password"
+                    placeholder="Enter password" required>
+
+                <p id="login-error" class="login-error"></p>
+
+                <button type="submit" class="primary-btn login-button">
+                    Login
+                </button>
+            </form>
+
+            <small>Authorized administrators only</small>
+        </div>
+    </div>
+
+    <!-- SIDEBAR -->
+    <aside class="sidebar">
+        <h2>🏫 SchoolBorrow</h2>
+        <p class="subtitle">Borrowing Management</p>
+
+        <nav>
+            <button class="nav-btn active" data-page="dashboard">Dashboard</button>
+            <button class="nav-btn" data-page="inventory">Inventory</button>
+            <button class="nav-btn" data-page="borrowers">Borrowers</button>
+            <button class="nav-btn" data-page="transactions">Transactions</button>
+        </nav>
+
+        <div class="sidebar-footer">
+            <span>Administrator</span>
+            <small>School Management System</small>
+        </div>
+    </aside>
+
+    <!-- MAIN CONTENT -->
+    <main class="main-content">
+        <header class="topbar">
+            <div>
+                <h1 id="page-title">Dashboard</h1>
+                <p>School Borrowing and Returning Management System</p>
+            </div>
+
+            <div class="topbar-actions">
+                <span class="admin-label">ADMIN</span>
+                <button id="logout-btn" class="secondary-btn">Logout</button>
+            </div>
+        </header>
+
+        <!-- DASHBOARD -->
+        <section id="dashboard" class="page active">
+            <h2>Overview</h2>
+
+            <div class="stats">
+                <div class="stat-card">
+                    <span>Total Items</span>
+                    <h2 id="total-items">0</h2>
+                </div>
+
+                <div class="stat-card">
+                    <span>Available Items</span>
+                    <h2 id="available-items">0</h2>
+                </div>
+
+                <div class="stat-card">
+                    <span>Borrowed Items</span>
+                    <h2 id="borrowed-items">0</h2>
+                </div>
+
+                <div class="stat-card">
+                    <span>Total Borrowers</span>
+                    <h2 id="total-borrowers">0</h2>
+                </div>
+            </div>
+
+            <div class="panel">
+                <h2>Recent Transactions</h2>
+
+                <div class="table-wrapper">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Borrower</th>
+                                <th>Item</th>
+                                <th>Date</th>
+                                <th>Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="dashboard-transactions"></tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- INVENTORY -->
+        <section id="inventory" class="page">
+            <div class="section-heading">
+                <h2>School Inventory</h2>
+                <button class="primary-btn" id="add-item-btn">+ Add Item</button>
+            </div>
+
+            <input type="search" id="item-search"
+                placeholder="Search inventory...">
+
+            <div class="panel table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Item ID</th>
+                            <th>Item Name</th>
+                            <th>Category</th>
+                            <th>Total Quantity</th>
+                            <th>Available</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="inventory-table"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- BORROWERS -->
+        <section id="borrowers" class="page">
+            <div class="section-heading">
+                <h2>Borrowers</h2>
+                <button class="primary-btn" id="add-borrower-btn">+ Add Borrower</button>
+            </div>
+
+            <input type="search" id="borrower-search"
+                placeholder="Search borrowers...">
+
+            <div class="panel table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Name</th>
+                            <th>Type</th>
+                            <th>Contact</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="borrowers-table"></tbody>
+                </table>
+            </div>
+        </section>
+
+        <!-- TRANSACTIONS -->
+        <section id="transactions" class="page">
+            <div class="section-heading">
+                <h2>Borrowing Transactions</h2>
+                <button class="primary-btn" id="borrow-btn">+ Record Borrowing</button>
+            </div>
+
+            <div class="panel table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Transaction ID</th>
+                            <th>Borrower</th>
+                            <th>Item</th>
+                            <th>Quantity</th>
+                            <th>Borrow Date</th>
+                            <th>Return Date</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="transactions-table"></tbody>
+                </table>
+            </div>
+
+            <button class="secondary-btn" id="export-btn">
+                Export Transactions (CSV)
+            </button>
+        </section>
+
+        <!-- MODAL -->
+        <div id="modal" class="modal">
+            <div class="modal-content">
+                <button class="close-btn" id="close-modal">×</button>
+                <h2 id="modal-title">Add Record</h2>
+                <form id="modal-form"></form>
+            </div>
+        </div>
+
+        <footer>
+            <p>SchoolBorrow © 2026 | School Borrowing Management System</p>
+        </footer>
+    </main>
+
+    <script src="assets/app.js"></script>
+</body>
+</html>
