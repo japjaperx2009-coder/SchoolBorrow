@@ -1,50 +1,33 @@
 
 /* =========================================
    SCHOOLBORROW
-   Three-role borrowing management system
+   Supabase-connected borrowing management
    ========================================= */
 
+const SUPABASE_URL = "https://uhkjktacwmcqywvlblcn.supabase.co";
+const SUPABASE_KEY = "sb_publishable_3Xt-YOdM7xXUYMLr8B4t5w_niq7y4g9";
+
+const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
 const KEYS = {
-  items: "sb_items",
-  borrowers: "sb_borrowers",
-  transactions: "sb_transactions",
-  accounts: "sb_accounts",
-  requests: "sb_requests",
   session: "sb_session"
 };
 
 const ADMIN_USERNAME = "admin";
-const ADMIN_PASSWORD = "school123";
 
 let currentUser = null;
 let currentPage = "";
 let toastTimer = null;
 
+let data = {
+  items: [],
+  borrowers: [],
+  transactions: [],
+  accounts: [],
+  requests: []
+};
+
 const $ = id => document.getElementById(id);
-
-function read(key, fallback = []) {
-  try {
-    const value = JSON.parse(localStorage.getItem(key));
-    return Array.isArray(fallback) ? (Array.isArray(value) ? value : fallback)
-      : (value ?? fallback);
-  } catch {
-    return fallback;
-  }
-}
-
-function save(key, value) {
-  localStorage.setItem(key, JSON.stringify(value));
-}
-
-function items() { return read(KEYS.items); }
-function borrowers() { return read(KEYS.borrowers); }
-function transactions() { return read(KEYS.transactions); }
-function accounts() { return read(KEYS.accounts); }
-function requests() { return read(KEYS.requests); }
-
-function uid() {
-  return Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-}
 
 function today() {
   const d = new Date();
@@ -63,19 +46,26 @@ function escapeHTML(value) {
 }
 
 function roleName(role) {
-  return role.charAt(0).toUpperCase() + role.slice(1);
+  return String(role || "").charAt(0).toUpperCase() +
+    String(role || "").slice(1);
 }
 
+function items() { return data.items; }
+function borrowers() { return data.borrowers; }
+function transactions() { return data.transactions; }
+function accounts() { return data.accounts; }
+function requests() { return data.requests; }
+
 function getItem(id) {
-  return items().find(item => String(item.id) === String(id));
+  return items().find(x => String(x.id) === String(id));
 }
 
 function getBorrower(id) {
-  return borrowers().find(person => String(person.id) === String(id));
+  return borrowers().find(x => String(x.id) === String(id));
 }
 
 function getAccount(id) {
-  return accounts().find(account => String(account.id) === String(id));
+  return accounts().find(x => String(x.id) === String(id));
 }
 
 function getItemName(id) {
@@ -86,19 +76,17 @@ function getBorrowerName(id) {
   return getBorrower(id)?.name || "Unknown borrower";
 }
 
-function isReturned(transaction) {
-  return String(transaction.status).toLowerCase() === "returned";
+function isReturned(t) {
+  return String(t.status).toLowerCase() === "returned";
 }
 
-function isOverdue(transaction) {
-  return !isReturned(transaction) &&
-    transaction.returnDate &&
-    transaction.returnDate < today();
+function isOverdue(t) {
+  return !isReturned(t) && t.returnDate && t.returnDate < today();
 }
 
-function transactionStatus(transaction) {
-  if (isReturned(transaction)) return "Returned";
-  if (isOverdue(transaction)) return "Overdue";
+function transactionStatus(t) {
+  if (isReturned(t)) return "Returned";
+  if (isOverdue(t)) return "Overdue";
   return "Borrowed";
 }
 
@@ -109,103 +97,172 @@ function statusBadge(status) {
 
 function showToast(message, error = false) {
   const toast = $("toast");
+  if (!toast) return;
+
   toast.textContent = message;
   toast.className = "toast show" + (error ? " error" : "");
+
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove("show"), 3000);
 }
 
-/* ---------- DATA INITIALIZATION ---------- */
+function showError(error, fallback = "Something went wrong.") {
+  console.error(error);
+  showToast(error?.message || fallback, true);
+}
 
-function initializeData() {
-  // Preserve existing inventory records and storage keys.
-  const currentItems = items().map(item => {
-    const quantity = Math.max(0, Number(item.quantity) || 0);
-    return {
-      ...item,
-      quantity,
-      available: item.available === undefined
-        ? quantity
-        : Math.max(0, Number(item.available) || 0)
-    };
-  });
+/* ---------- DATABASE DATA ---------- */
 
-  save(KEYS.items, currentItems);
+async function refreshData() {
+  const results = await Promise.all([
+    db.from("inventory_items").select("*").order("created_at"),
+    db.from("borrowers").select("*").order("created_at"),
+    db.from("borrowing_transactions").select("*").order("created_at"),
+    db.from("profiles").select("*").order("created_at"),
+    db.from("borrowing_requests").select("*").order("created_at")
+  ]);
 
-  // Preserve existing borrower and transaction records.
-  if (!localStorage.getItem(KEYS.borrowers)) save(KEYS.borrowers, []);
-  if (!localStorage.getItem(KEYS.transactions)) save(KEYS.transactions, []);
-  if (!localStorage.getItem(KEYS.accounts)) save(KEYS.accounts, []);
-  if (!localStorage.getItem(KEYS.requests)) save(KEYS.requests, []);
+  for (const result of results) {
+    if (result.error) throw result.error;
+  }
+
+  data.items = results[0].data.map(x => ({
+    id: x.id,
+    name: x.name,
+    category: x.category,
+    quantity: Number(x.quantity),
+    available: Number(x.available)
+  }));
+
+  data.borrowers = results[1].data.map(x => ({
+    id: x.id,
+    name: x.name,
+    type: x.type,
+    contact: x.contact || ""
+  }));
+
+  data.transactions = results[2].data.map(x => ({
+    id: x.id,
+    borrowerId: x.borrower_id,
+    itemId: x.item_id,
+    quantity: Number(x.quantity),
+    borrowDate: x.borrow_date,
+    returnDate: x.return_date,
+    actualReturnDate: x.actual_return_date,
+    status: x.status,
+    requestId: x.request_id
+  }));
+
+  data.accounts = results[3].data
+    .filter(x => x.role !== "admin")
+    .map(x => ({
+      id: x.id,
+      name: x.full_name,
+      username: x.username || "",
+      role: x.role,
+      borrowerId: x.borrower_id
+    }));
+
+  data.requests = results[4].data.map(x => ({
+    id: x.id,
+    teacherId: x.teacher_id,
+    teacherName: x.teacher_name,
+    borrowerId: x.borrower_id,
+    itemId: x.item_id,
+    itemName: x.item_name,
+    quantity: Number(x.quantity),
+    requestedDate: x.requested_date,
+    neededDate: x.needed_date,
+    purpose: x.purpose,
+    status: x.status,
+    approvedDate: x.approved_date,
+    rejectedDate: x.rejected_date,
+    transactionId: x.transaction_id
+  }));
 }
 
 /* ---------- LOGIN AND SESSION ---------- */
 
-function login(event) {
+async function login(event) {
   event.preventDefault();
 
   const role = $("login-role").value;
-  const username = $("login-username").value.trim();
+  const username = $("login-username").value.trim().toLowerCase();
   const password = $("login-password").value;
   const error = $("login-error");
 
-  let user = null;
+  error.textContent = "";
 
-  if (
-    role === "admin" &&
-    username === ADMIN_USERNAME &&
-    password === ADMIN_PASSWORD
-  ) {
-    user = {
-      id: "admin",
-      name: "Administrator",
-      username,
-      role: "admin"
-    };
-  } else if (role !== "admin") {
-    const account = accounts().find(account =>
-      account.username.toLowerCase() === username.toLowerCase() &&
-      account.password === password &&
-      account.role === role &&
-      account.active !== false
-    );
-
-    if (account) {
-      user = {
-        id: account.id,
-        name: account.name,
-        username: account.username,
-        role: account.role,
-        borrowerId: account.borrowerId
-      };
-    }
-  }
-
-  if (!user) {
-    error.textContent = "Incorrect username, password, or account type.";
+  if (!username || !password) {
+    error.textContent = "Enter your username and password.";
     return;
   }
 
-  currentUser = user;
-  sessionStorage.setItem(KEYS.session, JSON.stringify(user));
+  const email = username === ADMIN_USERNAME
+    ? "admin@schoolborrow.local"
+    : `${username}@schoolborrow.local`;
 
-  // Retain compatibility with the previous admin login flag.
-  if (role === "admin") {
-    sessionStorage.setItem("schoolborrow_logged_in", "true");
-  } else {
-    sessionStorage.removeItem("schoolborrow_logged_in");
+  try {
+    const { data: authData, error: authError } =
+      await db.auth.signInWithPassword({
+        email,
+        password
+      });
+
+    if (authError) throw authError;
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("*")
+      .eq("id", authData.user.id)
+      .single();
+
+    if (profileError) throw profileError;
+
+    if (profile.role !== role) {
+      await db.auth.signOut();
+      error.textContent = "Incorrect username, password, or account type.";
+      return;
+    }
+
+    currentUser = {
+      id: authData.user.id,
+      name: profile.full_name,
+      username: profile.username || username,
+      role: profile.role,
+      borrowerId: profile.borrower_id
+    };
+
+    await refreshData();
+
+    $("login-form").reset();
+    startApplication();
+
+  } catch (err) {
+    console.error(err);
+    error.textContent =
+      err.message === "Invalid login credentials"
+        ? "Incorrect username, password, or account type."
+        : err.message || "Login failed.";
   }
-
-  error.textContent = "";
-  $("login-form").reset();
-  startApplication();
 }
 
-function logout() {
+async function logout() {
+  try {
+    await db.auth.signOut();
+  } catch (err) {
+    console.error(err);
+  }
+
   currentUser = null;
   currentPage = "";
-  sessionStorage.removeItem(KEYS.session);
-  sessionStorage.removeItem("schoolborrow_logged_in");
+  data = {
+    items: [],
+    borrowers: [],
+    transactions: [],
+    accounts: [],
+    requests: []
+  };
 
   $("app").classList.add("hidden");
   $("login-screen").classList.remove("hidden");
@@ -214,29 +271,40 @@ function logout() {
   $("login-password").value = "";
 }
 
-function restoreSession() {
+async function restoreSession() {
   try {
-    const saved = JSON.parse(sessionStorage.getItem(KEYS.session));
-    if (saved && saved.role) {
-      currentUser = saved;
-      return true;
+    const { data: sessionData, error } = await db.auth.getSession();
+
+    if (error || !sessionData.session) return false;
+
+    const user = sessionData.session.user;
+
+    const { data: profile, error: profileError } = await db
+      .from("profiles")
+      .select("*")
+      .eq("id", user.id)
+      .single();
+
+    if (profileError || !profile) {
+      await db.auth.signOut();
+      return false;
     }
-  } catch {}
 
-  // If the old version's admin login is still active in this browser session,
-  // allow the administrator to continue without logging in again.
-  if (sessionStorage.getItem("schoolborrow_logged_in") === "true") {
     currentUser = {
-      id: "admin",
-      name: "Administrator",
-      username: ADMIN_USERNAME,
-      role: "admin"
+      id: user.id,
+      name: profile.full_name,
+      username: profile.username || "",
+      role: profile.role,
+      borrowerId: profile.borrower_id
     };
-    sessionStorage.setItem(KEYS.session, JSON.stringify(currentUser));
-    return true;
-  }
 
-  return false;
+    await refreshData();
+    return true;
+
+  } catch (err) {
+    console.error(err);
+    return false;
+  }
 }
 
 /* ---------- NAVIGATION ---------- */
@@ -281,7 +349,9 @@ function startApplication() {
 
   $("sidebar-name").textContent = currentUser.name;
   $("sidebar-role").textContent = roleName(currentUser.role);
-  $("user-avatar").textContent = currentUser.name.charAt(0).toUpperCase();
+  $("user-avatar").textContent =
+    currentUser.name.charAt(0).toUpperCase();
+
   $("today-date").textContent = new Date().toLocaleDateString(undefined, {
     weekday: "short",
     year: "numeric",
@@ -294,22 +364,25 @@ function startApplication() {
   });
 
   buildNavigation();
-
-  const firstPage = NAVIGATION[currentUser.role][0][0];
-  navigate(firstPage);
+  navigate(NAVIGATION[currentUser.role][0][0]);
 }
 
 function buildNavigation() {
-  $("navigation").innerHTML = NAVIGATION[currentUser.role].map(([page, icon, label]) => `
-    <button class="nav-link" data-page="${page}">
-      <span class="nav-icon">${icon}</span>
-      <span>${label}</span>
-    </button>
-  `).join("");
+  $("navigation").innerHTML =
+    NAVIGATION[currentUser.role].map(([page, icon, label]) => `
+      <button class="nav-link" data-page="${page}">
+        <span class="nav-icon">${icon}</span>
+        <span>${label}</span>
+      </button>
+    `).join("");
 }
 
 function navigate(page) {
-  const allowed = NAVIGATION[currentUser.role].some(entry => entry[0] === page);
+  if (!currentUser) return;
+
+  const allowed = NAVIGATION[currentUser.role]
+    .some(entry => entry[0] === page);
+
   if (!allowed) return;
 
   currentPage = page;
@@ -349,37 +422,50 @@ function renderAdminDashboard() {
   const allItems = items();
   const allTransactions = transactions();
   const active = allTransactions.filter(t => !isReturned(t));
-  const totalUnits = allItems.reduce((sum, item) => sum + Number(item.quantity || 0), 0);
-  const availableUnits = allItems.reduce((sum, item) => sum + Number(item.available || 0), 0);
+
+  const availableUnits = allItems.reduce(
+    (sum, item) => sum + Number(item.available || 0), 0
+  );
 
   $("stat-items").textContent = allItems.length;
   $("stat-available").textContent = availableUnits;
-  $("stat-borrowed").textContent = active.reduce((sum, t) => sum + Number(t.quantity || 0), 0);
+  $("stat-borrowed").textContent = active.reduce(
+    (sum, t) => sum + Number(t.quantity || 0), 0
+  );
   $("stat-overdue").textContent = active.filter(isOverdue).length;
   $("stat-borrowers").textContent = borrowers().length;
-  $("stat-requests").textContent = requests().filter(r => r.status === "Pending").length;
+  $("stat-requests").textContent =
+    requests().filter(r => r.status === "Pending").length;
 
   const recent = [...allTransactions].reverse().slice(0, 6);
-  $("admin-recent-table").innerHTML = recent.length ? recent.map(t => `
-    <tr>
-      <td>${escapeHTML(getBorrowerName(t.borrowerId))}</td>
-      <td>${escapeHTML(getItemName(t.itemId))}</td>
-      <td>${Number(t.quantity)}</td>
-      <td>${escapeHTML(t.borrowDate || "-")}</td>
-      <td>${statusBadge(transactionStatus(t))}</td>
-    </tr>
-  `).join("") : `<tr><td colspan="5" class="empty-row">No transactions recorded yet.</td></tr>`;
 
-  const pending = requests().filter(r => r.status === "Pending").slice(0, 4);
-  $("admin-pending-preview").innerHTML = pending.length ? pending.map(r => `
-    <div class="preview-row">
-      <div>
-        <strong>${escapeHTML(r.teacherName)}</strong>
-        <p>${escapeHTML(r.itemName)} · Qty ${Number(r.quantity)} · Needed ${escapeHTML(r.neededDate)}</p>
+  $("admin-recent-table").innerHTML = recent.length
+    ? recent.map(t => `
+      <tr>
+        <td>${escapeHTML(getBorrowerName(t.borrowerId))}</td>
+        <td>${escapeHTML(getItemName(t.itemId))}</td>
+        <td>${Number(t.quantity)}</td>
+        <td>${escapeHTML(t.borrowDate || "-")}</td>
+        <td>${statusBadge(transactionStatus(t))}</td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="5" class="empty-row">No transactions recorded yet.</td></tr>`;
+
+  const pending = requests()
+    .filter(r => r.status === "Pending")
+    .slice(0, 4);
+
+  $("admin-pending-preview").innerHTML = pending.length
+    ? pending.map(r => `
+      <div class="preview-row">
+        <div>
+          <strong>${escapeHTML(r.teacherName)}</strong>
+          <p>${escapeHTML(r.itemName)} · Qty ${Number(r.quantity)} · Needed ${escapeHTML(r.neededDate)}</p>
+        </div>
+        ${statusBadge("Pending")}
       </div>
-      ${statusBadge("Pending")}
-    </div>
-  `).join("") : `<p class="muted">There are no pending teacher requests.</p>`;
+    `).join("")
+    : `<p class="muted">There are no pending teacher requests.</p>`;
 }
 
 /* ---------- INVENTORY ---------- */
@@ -391,22 +477,27 @@ function renderInventory() {
     `${item.name} ${item.category}`.toLowerCase().includes(search)
   );
 
-  $("inventory-table").innerHTML = filtered.length ? filtered.map(item => {
-    const borrowed = Number(item.quantity || 0) - Number(item.available || 0);
-    return `
-      <tr>
-        <td><strong>${escapeHTML(item.name)}</strong></td>
-        <td>${escapeHTML(item.category)}</td>
-        <td>${Number(item.quantity)}</td>
-        <td>${Number(item.available)}</td>
-        <td>${Math.max(0, borrowed)}</td>
-        <td><div class="table-actions">
-          <button class="secondary-btn" data-action="edit-item" data-id="${escapeHTML(item.id)}">Edit</button>
-          <button class="danger-btn" data-action="delete-item" data-id="${escapeHTML(item.id)}">Delete</button>
-        </div></td>
-      </tr>
-    `;
-  }).join("") : `<tr><td colspan="6" class="empty-row">No inventory items found.</td></tr>`;
+  $("inventory-table").innerHTML = filtered.length
+    ? filtered.map(item => {
+      const borrowed = Number(item.quantity) - Number(item.available);
+
+      return `
+        <tr>
+          <td><strong>${escapeHTML(item.name)}</strong></td>
+          <td>${escapeHTML(item.category)}</td>
+          <td>${Number(item.quantity)}</td>
+          <td>${Number(item.available)}</td>
+          <td>${Math.max(0, borrowed)}</td>
+          <td>
+            <div class="table-actions">
+              <button class="secondary-btn" data-action="edit-item" data-id="${escapeHTML(item.id)}">Edit</button>
+              <button class="danger-btn" data-action="delete-item" data-id="${escapeHTML(item.id)}">Delete</button>
+            </div>
+          </td>
+        </tr>
+      `;
+    }).join("")
+    : `<tr><td colspan="6" class="empty-row">No inventory items found.</td></tr>`;
 }
 
 function resetItemForm() {
@@ -416,7 +507,7 @@ function resetItemForm() {
   $("item-cancel").classList.add("hidden");
 }
 
-function submitItem(event) {
+async function submitItem(event) {
   event.preventDefault();
 
   const id = $("item-id").value;
@@ -429,42 +520,49 @@ function submitItem(event) {
     return;
   }
 
-  const all = items();
+  try {
+    if (id) {
+      const old = getItem(id);
+      if (!old) return;
 
-  if (id) {
-    const index = all.findIndex(item => String(item.id) === String(id));
-    if (index < 0) return;
+      const borrowed = Number(old.quantity) - Number(old.available);
 
-    const old = all[index];
-    const borrowed = Number(old.quantity) - Number(old.available);
+      if (quantity < borrowed) {
+        showToast(`At least ${borrowed} units are currently borrowed.`, true);
+        return;
+      }
 
-    if (quantity < borrowed) {
-      showToast(`At least ${borrowed} units are currently borrowed.`, true);
-      return;
+      const { error } = await db.from("inventory_items")
+        .update({
+          name,
+          category,
+          quantity,
+          available: quantity - borrowed
+        })
+        .eq("id", id);
+
+      if (error) throw error;
+      showToast("Inventory item updated.");
+
+    } else {
+      const { error } = await db.from("inventory_items").insert({
+        name,
+        category,
+        quantity,
+        available: quantity
+      });
+
+      if (error) throw error;
+      showToast("Inventory item added.");
     }
 
-    all[index] = {
-      ...old,
-      name,
-      category,
-      quantity,
-      available: quantity - borrowed
-    };
-    showToast("Inventory item updated.");
-  } else {
-    all.push({
-      id: uid(),
-      name,
-      category,
-      quantity,
-      available: quantity
-    });
-    showToast("Inventory item added.");
-  }
+    await refreshData();
+    resetItemForm();
+    renderInventory();
 
-  save(KEYS.items, all);
-  resetItemForm();
-  renderInventory();
+  } catch (err) {
+    showError(err, "Could not save inventory item.");
+  }
 }
 
 function editItem(id) {
@@ -480,10 +578,11 @@ function editItem(id) {
   $("item-name").focus();
 }
 
-function deleteItem(id) {
+async function deleteItem(id) {
   const active = transactions().some(t =>
     String(t.itemId) === String(id) && !isReturned(t)
   );
+
   const pending = requests().some(r =>
     String(r.itemId) === String(id) && r.status === "Pending"
   );
@@ -495,30 +594,46 @@ function deleteItem(id) {
 
   if (!confirm("Delete this inventory item?")) return;
 
-  save(KEYS.items, items().filter(item => String(item.id) !== String(id)));
-  renderInventory();
-  showToast("Item deleted.");
+  try {
+    const { error } = await db.from("inventory_items")
+      .delete().eq("id", id);
+
+    if (error) throw error;
+
+    await refreshData();
+    renderInventory();
+    showToast("Item deleted.");
+
+  } catch (err) {
+    showError(err, "Could not delete item.");
+  }
 }
 
 /* ---------- BORROWERS ---------- */
 
 function renderBorrowers() {
   const search = ($("borrower-search").value || "").toLowerCase();
+
   const filtered = borrowers().filter(person =>
-    `${person.name} ${person.type} ${person.contact || ""}`.toLowerCase().includes(search)
+    `${person.name} ${person.type} ${person.contact || ""}`
+      .toLowerCase().includes(search)
   );
 
-  $("borrowers-table").innerHTML = filtered.length ? filtered.map(person => `
-    <tr>
-      <td><strong>${escapeHTML(person.name)}</strong></td>
-      <td>${escapeHTML(person.type)}</td>
-      <td>${escapeHTML(person.contact || "-")}</td>
-      <td><button class="danger-btn" data-action="delete-borrower" data-id="${escapeHTML(person.id)}">Delete</button></td>
-    </tr>
-  `).join("") : `<tr><td colspan="4" class="empty-row">No borrowers found.</td></tr>`;
+  $("borrowers-table").innerHTML = filtered.length
+    ? filtered.map(person => `
+      <tr>
+        <td><strong>${escapeHTML(person.name)}</strong></td>
+        <td>${escapeHTML(person.type)}</td>
+        <td>${escapeHTML(person.contact || "-")}</td>
+        <td>
+          <button class="danger-btn" data-action="delete-borrower" data-id="${escapeHTML(person.id)}">Delete</button>
+        </td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="4" class="empty-row">No borrowers found.</td></tr>`;
 }
 
-function submitBorrower(event) {
+async function submitBorrower(event) {
   event.preventDefault();
 
   const name = $("borrower-name").value.trim();
@@ -527,8 +642,7 @@ function submitBorrower(event) {
 
   if (!name) return;
 
-  const all = borrowers();
-  const duplicate = all.some(person =>
+  const duplicate = borrowers().some(person =>
     person.name.toLowerCase() === name.toLowerCase() &&
     person.type.toLowerCase() === type.toLowerCase()
   );
@@ -538,18 +652,33 @@ function submitBorrower(event) {
     return;
   }
 
-  all.push({ id: uid(), name, type, contact });
-  save(KEYS.borrowers, all);
-  $("borrower-form").reset();
-  renderBorrowers();
-  showToast("Borrower registered.");
+  try {
+    const { error } = await db.from("borrowers").insert({
+      name,
+      type,
+      contact
+    });
+
+    if (error) throw error;
+
+    await refreshData();
+    $("borrower-form").reset();
+    renderBorrowers();
+    showToast("Borrower registered.");
+
+  } catch (err) {
+    showError(err, "Could not register borrower.");
+  }
 }
 
-function deleteBorrower(id) {
+async function deleteBorrower(id) {
   const hasActive = transactions().some(t =>
     String(t.borrowerId) === String(id) && !isReturned(t)
   );
-  const linkedAccount = accounts().some(a => String(a.borrowerId) === String(id));
+
+  const linkedAccount = accounts().some(a =>
+    String(a.borrowerId) === String(id)
+  );
 
   if (hasActive || linkedAccount) {
     showToast("This borrower has an account or an active borrowing record.", true);
@@ -558,9 +687,19 @@ function deleteBorrower(id) {
 
   if (!confirm("Delete this borrower?")) return;
 
-  save(KEYS.borrowers, borrowers().filter(person => String(person.id) !== String(id)));
-  renderBorrowers();
-  showToast("Borrower deleted.");
+  try {
+    const { error } = await db.from("borrowers")
+      .delete().eq("id", id);
+
+    if (error) throw error;
+
+    await refreshData();
+    renderBorrowers();
+    showToast("Borrower deleted.");
+
+  } catch (err) {
+    showError(err, "Could not delete borrower.");
+  }
 }
 
 /* ---------- USER ACCOUNTS ---------- */
@@ -568,81 +707,68 @@ function deleteBorrower(id) {
 function renderAccounts() {
   const list = accounts();
 
-  $("accounts-table").innerHTML = list.length ? list.map(account => `
-    <tr>
-      <td><strong>${escapeHTML(account.name)}</strong></td>
-      <td>${escapeHTML(account.username)}</td>
-      <td>${escapeHTML(roleName(account.role))}</td>
-      <td><button class="danger-btn" data-action="delete-account" data-id="${escapeHTML(account.id)}">Delete account</button></td>
-    </tr>
-  `).join("") : `<tr><td colspan="4" class="empty-row">No student or teacher accounts created yet.</td></tr>`;
+  $("accounts-table").innerHTML = list.length
+    ? list.map(account => `
+      <tr>
+        <td><strong>${escapeHTML(account.name)}</strong></td>
+        <td>${escapeHTML(account.username)}</td>
+        <td>${escapeHTML(roleName(account.role))}</td>
+        <td><span class="muted">Managed through Supabase</span></td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="4" class="empty-row">No student or teacher accounts created yet.</td></tr>`;
 }
 
-function submitAccount(event) {
+async function submitAccount(event) {
   event.preventDefault();
 
   const name = $("account-name").value.trim();
   const role = $("account-role").value;
-  const username = $("account-username").value.trim();
+  const username = $("account-username").value.trim().toLowerCase();
   const password = $("account-password").value;
   const contact = $("account-contact").value.trim();
 
-  if (!name || !username || password.length < 4) {
-    showToast("Complete all required fields. Password must be at least 4 characters.", true);
+  if (!name || !username || password.length < 8) {
+    showToast("Complete all fields. Password must be at least 8 characters.", true);
     return;
   }
 
-  if (username.toLowerCase() === ADMIN_USERNAME ||
-      accounts().some(a => a.username.toLowerCase() === username.toLowerCase())) {
+  if (!/^[a-z0-9_]{3,30}$/.test(username)) {
+    showToast("Username must be 3-30 characters using letters, numbers, or underscores.", true);
+    return;
+  }
+
+  if (username === ADMIN_USERNAME ||
+      accounts().some(a => a.username.toLowerCase() === username)) {
     showToast("That username is already in use.", true);
     return;
   }
 
-  // Link the login account to an existing borrower when possible.
-  let borrower = borrowers().find(person =>
-    person.name.toLowerCase() === name.toLowerCase() &&
-    person.type.toLowerCase() === role
-  );
+  try {
+    const { data: result, error } = await db.functions.invoke(
+      "admin-create-user",
+      {
+        body: {
+          username,
+          password,
+          full_name: name,
+          role,
+          contact
+        }
+      }
+    );
 
-  if (!borrower) {
-    borrower = {
-      id: uid(),
-      name,
-      type: roleName(role),
-      contact
-    };
-    save(KEYS.borrowers, [...borrowers(), borrower]);
-  } else if (contact && !borrower.contact) {
-    save(KEYS.borrowers, borrowers().map(person =>
-      String(person.id) === String(borrower.id)
-        ? { ...person, contact }
-        : person
-    ));
+    if (error) throw error;
+    if (result?.error) throw new Error(result.error);
+
+    await refreshData();
+    $("account-form").reset();
+    renderAccounts();
+    showToast(`${roleName(role)} account created successfully.`);
+
+  } catch (err) {
+    showError(err, "Could not create account.");
   }
-
-  const newAccount = {
-    id: uid(),
-    name,
-    role,
-    username,
-    password,
-    borrowerId: borrower.id,
-    active: true,
-    createdAt: today()
-  };
-
-  save(KEYS.accounts, [...accounts(), newAccount]);
-  $("account-form").reset();
-  renderAccounts();
-  showToast(`${roleName(role)} account created successfully.`);
-}
-
-function deleteAccount(id) {
-  if (!confirm("Delete this login account? Borrowing history will be kept.")) return;
-
-  save(KEYS.accounts, accounts().filter(account => String(account.id) !== String(id)));
-  renderAccounts();
-  showToast("Account deleted. Borrowing history was preserved.");
 }
 
 /* ---------- BORROWING AND RETURNS ---------- */
@@ -654,12 +780,16 @@ function populateTransactionOptions() {
   const currentBorrower = borrowerSelect.value;
   const currentItem = itemSelect.value;
 
-  borrowerSelect.innerHTML = `<option value="">Select borrower</option>` +
+  borrowerSelect.innerHTML =
+    `<option value="">Select borrower</option>` +
     borrowers().map(person => `
-      <option value="${escapeHTML(person.id)}">${escapeHTML(person.name)} (${escapeHTML(person.type)})</option>
+      <option value="${escapeHTML(person.id)}">
+        ${escapeHTML(person.name)} (${escapeHTML(person.type)})
+      </option>
     `).join("");
 
-  itemSelect.innerHTML = `<option value="">Select item</option>` +
+  itemSelect.innerHTML =
+    `<option value="">Select item</option>` +
     items().map(item => `
       <option value="${escapeHTML(item.id)}" ${Number(item.available) < 1 ? "disabled" : ""}>
         ${escapeHTML(item.name)} · Available: ${Number(item.available)}
@@ -674,33 +804,42 @@ function renderTransactions() {
   populateTransactionOptions();
 
   const search = ($("transaction-search").value || "").toLowerCase();
+
   const list = [...transactions()].reverse().filter(t => {
-    const text = `${getBorrowerName(t.borrowerId)} ${getItemName(t.itemId)} ${t.status}`.toLowerCase();
+    const text =
+      `${getBorrowerName(t.borrowerId)} ${getItemName(t.itemId)} ${t.status}`
+        .toLowerCase();
+
     return text.includes(search);
   });
 
-  $("transactions-table").innerHTML = list.length ? list.map(t => {
-    const status = transactionStatus(t);
-    return `
-      <tr>
-        <td>${escapeHTML(getBorrowerName(t.borrowerId))}</td>
-        <td>${escapeHTML(getItemName(t.itemId))}</td>
-        <td>${Number(t.quantity)}</td>
-        <td>${escapeHTML(t.borrowDate || "-")}</td>
-        <td>${escapeHTML(t.returnDate || "-")}</td>
-        <td>${escapeHTML(t.actualReturnDate || "-")}</td>
-        <td>
-          ${statusBadge(status)}
-          ${!isReturned(t) ? `<div class="table-actions" style="margin-top:7px">
-            <button class="secondary-btn" data-action="return-item" data-id="${escapeHTML(t.id)}">Record return</button>
-          </div>` : ""}
-        </td>
-      </tr>
-    `;
-  }).join("") : `<tr><td colspan="7" class="empty-row">No transactions found.</td></tr>`;
+  $("transactions-table").innerHTML = list.length
+    ? list.map(t => {
+      const status = transactionStatus(t);
+
+      return `
+        <tr>
+          <td>${escapeHTML(getBorrowerName(t.borrowerId))}</td>
+          <td>${escapeHTML(getItemName(t.itemId))}</td>
+          <td>${Number(t.quantity)}</td>
+          <td>${escapeHTML(t.borrowDate || "-")}</td>
+          <td>${escapeHTML(t.returnDate || "-")}</td>
+          <td>${escapeHTML(t.actualReturnDate || "-")}</td>
+          <td>
+            ${statusBadge(status)}
+            ${!isReturned(t) ? `
+              <div class="table-actions" style="margin-top:7px">
+                <button class="secondary-btn" data-action="return-item" data-id="${escapeHTML(t.id)}">Record return</button>
+              </div>
+            ` : ""}
+          </td>
+        </tr>
+      `;
+    }).join("")
+    : `<tr><td colspan="7" class="empty-row">No transactions found.</td></tr>`;
 }
 
-function submitTransaction(event) {
+async function submitTransaction(event) {
   event.preventDefault();
 
   const borrowerId = $("transaction-borrower").value;
@@ -711,7 +850,8 @@ function submitTransaction(event) {
   const person = getBorrower(borrowerId);
   const item = getItem(itemId);
 
-  if (!person || !item || !Number.isInteger(quantity) || quantity < 1 || !dueDate) {
+  if (!person || !item || !Number.isInteger(quantity) ||
+      quantity < 1 || !dueDate) {
     showToast("Please complete all borrowing details.", true);
     return;
   }
@@ -726,62 +866,95 @@ function submitTransaction(event) {
     return;
   }
 
-  save(KEYS.items, items().map(entry =>
-    String(entry.id) === String(itemId)
-      ? { ...entry, available: Number(entry.available) - quantity }
-      : entry
-  ));
+  try {
+    const { error: stockError } = await db
+      .from("inventory_items")
+      .update({ available: Number(item.available) - quantity })
+      .eq("id", itemId);
 
-  const record = {
-    id: uid(),
-    borrowerId,
-    itemId,
-    quantity,
-    borrowDate: today(),
-    returnDate: dueDate,
-    actualReturnDate: null,
-    status: "Borrowed"
-  };
+    if (stockError) throw stockError;
 
-  save(KEYS.transactions, [...transactions(), record]);
-  $("transaction-form").reset();
-  $("transaction-quantity").value = 1;
-  renderTransactions();
-  showToast("Borrowing recorded successfully.");
+    const { error: transactionError } = await db
+      .from("borrowing_transactions")
+      .insert({
+        borrower_id: borrowerId,
+        item_id: itemId,
+        quantity,
+        borrow_date: today(),
+        return_date: dueDate,
+        actual_return_date: null,
+        status: "Borrowed"
+      });
+
+    if (transactionError) {
+      await db.from("inventory_items")
+        .update({ available: Number(item.available) })
+        .eq("id", itemId);
+
+      throw transactionError;
+    }
+
+    await refreshData();
+
+    $("transaction-form").reset();
+    $("transaction-quantity").value = 1;
+    renderTransactions();
+    showToast("Borrowing recorded successfully.");
+
+  } catch (err) {
+    showError(err, "Could not record borrowing.");
+  }
 }
 
-function returnTransaction(id) {
+async function returnTransaction(id) {
   const record = transactions().find(t => String(t.id) === String(id));
   if (!record || isReturned(record)) return;
 
   if (!confirm(`Record the return of ${getItemName(record.itemId)}?`)) return;
 
-  save(KEYS.transactions, transactions().map(t =>
-    String(t.id) === String(id)
-      ? { ...t, actualReturnDate: today(), status: "Returned" }
-      : t
-  ));
+  const item = getItem(record.itemId);
+  if (!item) {
+    showToast("The inventory item could not be found.", true);
+    return;
+  }
 
-  save(KEYS.items, items().map(item =>
-    String(item.id) === String(record.itemId)
-      ? {
-          ...item,
-          available: Math.min(
-            Number(item.quantity),
-            Number(item.available) + Number(record.quantity)
-          )
-        }
-      : item
-  ));
+  try {
+    const { error: transactionError } = await db
+      .from("borrowing_transactions")
+      .update({
+        actual_return_date: today(),
+        status: "Returned"
+      })
+      .eq("id", id);
 
-  renderTransactions();
-  showToast("Return recorded. Inventory has been updated.");
+    if (transactionError) throw transactionError;
+
+    const { error: stockError } = await db
+      .from("inventory_items")
+      .update({
+        available: Math.min(
+          Number(item.quantity),
+          Number(item.available) + Number(record.quantity)
+        )
+      })
+      .eq("id", item.id);
+
+    if (stockError) throw stockError;
+
+    await refreshData();
+    renderTransactions();
+    showToast("Return recorded. Inventory has been updated.");
+
+  } catch (err) {
+    showError(err, "Could not record return.");
+  }
 }
 
 /* ---------- TEACHER REQUESTS ---------- */
 
 function openRequestModal(itemId) {
   const item = getItem(itemId);
+
   if (!item || Number(item.available) < 1) {
     showToast("This item is currently unavailable.", true);
     return;
@@ -790,6 +963,7 @@ function openRequestModal(itemId) {
   $("request-item-id").value = item.id;
   $("request-item-label").textContent =
     `${item.name} · ${item.available} currently available`;
+
   $("request-quantity").value = 1;
   $("request-quantity").max = item.available;
   $("request-date").min = today();
@@ -801,7 +975,7 @@ function closeRequestModal() {
   $("request-modal").classList.add("hidden");
 }
 
-function submitRequest(event) {
+async function submitRequest(event) {
   event.preventDefault();
 
   const item = getItem($("request-item-id").value);
@@ -809,7 +983,8 @@ function submitRequest(event) {
   const neededDate = $("request-date").value;
   const purpose = $("request-purpose").value.trim();
 
-  if (!item || !Number.isInteger(quantity) || quantity < 1 || !neededDate || !purpose) {
+  if (!item || !Number.isInteger(quantity) || quantity < 1 ||
+      !neededDate || !purpose) {
     showToast("Please complete all request details.", true);
     return;
   }
@@ -835,113 +1010,164 @@ function submitRequest(event) {
     return;
   }
 
-  const request = {
-    id: uid(),
-    teacherId: currentUser.id,
-    teacherName: currentUser.name,
-    borrowerId: currentUser.borrowerId,
-    itemId: item.id,
-    itemName: item.name,
-    quantity,
-    requestedDate: today(),
-    neededDate,
-    purpose,
-    status: "Pending"
-  };
+  try {
+    const { error } = await db.from("borrowing_requests").insert({
+      teacher_id: currentUser.id,
+      teacher_name: currentUser.name,
+      borrower_id: currentUser.borrowerId,
+      item_id: item.id,
+      item_name: item.name,
+      quantity,
+      requested_date: today(),
+      needed_date: neededDate,
+      purpose,
+      status: "Pending"
+    });
 
-  save(KEYS.requests, [...requests(), request]);
-  closeRequestModal();
-  showToast("Your borrowing request was submitted.");
-  if (currentPage === "teacher-requests") renderTeacherRequests();
+    if (error) throw error;
+
+    await refreshData();
+    closeRequestModal();
+    showToast("Your borrowing request was submitted.");
+
+    if (currentPage === "teacher-requests") {
+      renderTeacherRequests();
+    }
+
+  } catch (err) {
+    showError(err, "Could not submit request.");
+  }
 }
 
 function renderAdminRequests() {
   const list = [...requests()].reverse();
 
-  $("requests-table").innerHTML = list.length ? list.map(request => `
-    <tr>
-      <td><strong>${escapeHTML(request.teacherName)}</strong></td>
-      <td>${escapeHTML(request.itemName || getItemName(request.itemId))}</td>
-      <td>${Number(request.quantity)}</td>
-      <td>${escapeHTML(request.requestedDate)}</td>
-      <td>${escapeHTML(request.neededDate)}</td>
-      <td>${escapeHTML(request.purpose)}</td>
-      <td>
-        ${statusBadge(request.status)}
-        ${request.status === "Pending" ? `
-          <div class="table-actions" style="margin-top:7px">
-            <button class="primary-btn" data-action="approve-request" data-id="${escapeHTML(request.id)}">Approve</button>
-            <button class="danger-btn" data-action="reject-request" data-id="${escapeHTML(request.id)}">Reject</button>
-          </div>` : ""}
-      </td>
-    </tr>
-  `).join("") : `<tr><td colspan="7" class="empty-row">No teacher requests yet.</td></tr>`;
+  $("requests-table").innerHTML = list.length
+    ? list.map(request => `
+      <tr>
+        <td><strong>${escapeHTML(request.teacherName)}</strong></td>
+        <td>${escapeHTML(request.itemName || getItemName(request.itemId))}</td>
+        <td>${Number(request.quantity)}</td>
+        <td>${escapeHTML(request.requestedDate)}</td>
+        <td>${escapeHTML(request.neededDate)}</td>
+        <td>${escapeHTML(request.purpose)}</td>
+        <td>
+          ${statusBadge(request.status)}
+          ${request.status === "Pending" ? `
+            <div class="table-actions" style="margin-top:7px">
+              <button class="primary-btn" data-action="approve-request" data-id="${escapeHTML(request.id)}">Approve</button>
+              <button class="danger-btn" data-action="reject-request" data-id="${escapeHTML(request.id)}">Reject</button>
+            </div>
+          ` : ""}
+        </td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="7" class="empty-row">No teacher requests yet.</td></tr>`;
 }
 
-function approveRequest(id) {
+async function approveRequest(id) {
   const request = requests().find(r => String(r.id) === String(id));
   if (!request || request.status !== "Pending") return;
 
   const item = getItem(request.itemId);
+
   if (!item || Number(item.available) < Number(request.quantity)) {
     showToast("Not enough stock is available to approve this request.", true);
     return;
   }
 
   const borrower = getBorrower(request.borrowerId);
+
   if (!borrower) {
     showToast("The teacher's borrower record could not be found.", true);
     return;
   }
 
-  if (!confirm(`Approve ${request.teacherName}'s request for ${request.quantity} × ${request.itemName}?`)) return;
+  if (!confirm(
+    `Approve ${request.teacherName}'s request for ${request.quantity} × ${request.itemName}?`
+  )) return;
 
-  const dueDate = request.neededDate >= today()
-    ? request.neededDate
-    : today();
+  try {
+    const dueDate = request.neededDate >= today()
+      ? request.neededDate
+      : today();
 
-  save(KEYS.items, items().map(entry =>
-    String(entry.id) === String(item.id)
-      ? { ...entry, available: Number(entry.available) - Number(request.quantity) }
-      : entry
-  ));
+    const { error: stockError } = await db
+      .from("inventory_items")
+      .update({
+        available: Number(item.available) - Number(request.quantity)
+      })
+      .eq("id", item.id);
 
-  const transaction = {
-    id: uid(),
-    borrowerId: borrower.id,
-    itemId: item.id,
-    quantity: Number(request.quantity),
-    borrowDate: today(),
-    returnDate: dueDate,
-    actualReturnDate: null,
-    status: "Borrowed",
-    requestId: request.id
-  };
+    if (stockError) throw stockError;
 
-  save(KEYS.transactions, [...transactions(), transaction]);
-  save(KEYS.requests, requests().map(r =>
-    String(r.id) === String(id)
-      ? { ...r, status: "Approved", approvedDate: today(), transactionId: transaction.id }
-      : r
-  ));
+    const { data: transaction, error: transactionError } = await db
+      .from("borrowing_transactions")
+      .insert({
+        borrower_id: borrower.id,
+        item_id: item.id,
+        quantity: Number(request.quantity),
+        borrow_date: today(),
+        return_date: dueDate,
+        actual_return_date: null,
+        status: "Borrowed",
+        request_id: request.id
+      })
+      .select()
+      .single();
 
-  renderAdminRequests();
-  showToast("Request approved and borrowing recorded.");
+    if (transactionError) {
+      await db.from("inventory_items")
+        .update({ available: Number(item.available) })
+        .eq("id", item.id);
+
+      throw transactionError;
+    }
+
+    const { error: requestError } = await db
+      .from("borrowing_requests")
+      .update({
+        status: "Approved",
+        approved_date: new Date().toISOString(),
+        transaction_id: transaction.id
+      })
+      .eq("id", id);
+
+    if (requestError) throw requestError;
+
+    await refreshData();
+    renderAdminRequests();
+    showToast("Request approved and borrowing recorded.");
+
+  } catch (err) {
+    showError(err, "Could not approve request.");
+  }
 }
 
-function rejectRequest(id) {
+async function rejectRequest(id) {
   const request = requests().find(r => String(r.id) === String(id));
   if (!request || request.status !== "Pending") return;
+
   if (!confirm("Reject this teacher borrowing request?")) return;
 
-  save(KEYS.requests, requests().map(r =>
-    String(r.id) === String(id)
-      ? { ...r, status: "Rejected", rejectedDate: today() }
-      : r
-  ));
+  try {
+    const { error } = await db
+      .from("borrowing_requests")
+      .update({
+        status: "Rejected",
+        rejected_date: new Date().toISOString()
+      })
+      .eq("id", id);
 
-  renderAdminRequests();
-  showToast("Request rejected.");
+    if (error) throw error;
+
+    await refreshData();
+    renderAdminRequests();
+    showToast("Request rejected.");
+
+  } catch (err) {
+    showError(err, "Could not reject request.");
+  }
 }
 
 function renderTeacherRequests() {
@@ -949,16 +1175,18 @@ function renderTeacherRequests() {
     .filter(r => String(r.teacherId) === String(currentUser.id))
     .reverse();
 
-  $("teacher-requests-table").innerHTML = list.length ? list.map(r => `
-    <tr>
-      <td>${escapeHTML(r.itemName || getItemName(r.itemId))}</td>
-      <td>${Number(r.quantity)}</td>
-      <td>${escapeHTML(r.requestedDate)}</td>
-      <td>${escapeHTML(r.neededDate)}</td>
-      <td>${escapeHTML(r.purpose)}</td>
-      <td>${statusBadge(r.status)}</td>
-    </tr>
-  `).join("") : `<tr><td colspan="6" class="empty-row">You haven't submitted any requests.</td></tr>`;
+  $("teacher-requests-table").innerHTML = list.length
+    ? list.map(r => `
+      <tr>
+        <td>${escapeHTML(r.itemName || getItemName(r.itemId))}</td>
+        <td>${Number(r.quantity)}</td>
+        <td>${escapeHTML(r.requestedDate)}</td>
+        <td>${escapeHTML(r.neededDate)}</td>
+        <td>${escapeHTML(r.purpose)}</td>
+        <td>${statusBadge(r.status)}</td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="6" class="empty-row">You haven't submitted any requests.</td></tr>`;
 }
 
 /* ---------- STUDENT AND TEACHER CATALOG ---------- */
@@ -972,31 +1200,34 @@ function renderCatalog(role) {
     `${item.name} ${item.category}`.toLowerCase().includes(search)
   );
 
-  $(containerId).innerHTML = filtered.length ? filtered.map(item => {
-    const available = Number(item.available) > 0;
-    const action = role === "teacher"
-      ? `<button class="primary-btn" data-action="request-item" data-id="${escapeHTML(item.id)}" ${!available ? "disabled" : ""}>Request item</button>`
-      : `<span class="muted">Please visit the administrator to borrow this item.</span>`;
+  $(containerId).innerHTML = filtered.length
+    ? filtered.map(item => {
+      const available = Number(item.available) > 0;
 
-    return `
-      <article class="item-card">
-        <div class="item-symbol">📦</div>
-        <h3>${escapeHTML(item.name)}</h3>
-        <p>${escapeHTML(item.category)}</p>
-        <div class="item-quantity">${available ? `${Number(item.available)} available` : "Currently unavailable"}</div>
-        ${statusBadge(available ? "Available" : "Unavailable")}
-        <div style="margin-top:14px">${action}</div>
-      </article>
-    `;
-  }).join("") : `<p class="muted">No matching school items found.</p>`;
+      const action = role === "teacher"
+        ? `<button class="primary-btn" data-action="request-item" data-id="${escapeHTML(item.id)}" ${!available ? "disabled" : ""}>Request item</button>`
+        : `<span class="muted">Please visit the administrator to borrow this item.</span>`;
+
+      return `
+        <article class="item-card">
+          <div class="item-symbol">📦</div>
+          <h3>${escapeHTML(item.name)}</h3>
+          <p>${escapeHTML(item.category)}</p>
+          <div class="item-quantity">
+            ${available ? `${Number(item.available)} available` : "Currently unavailable"}
+          </div>
+          ${statusBadge(available ? "Available" : "Unavailable")}
+          <div style="margin-top:14px">${action}</div>
+        </article>
+      `;
+    }).join("")
+    : `<p class="muted">No matching school items found.</p>`;
 }
 
 /* ---------- PERSONAL HISTORY ---------- */
 
-function getMyTransactions(role) {
-  const account = getAccount(currentUser.id);
-  const borrowerId = currentUser.borrowerId || account?.borrowerId;
-
+function getMyTransactions() {
+  const borrowerId = currentUser.borrowerId;
   if (!borrowerId) return [];
 
   return transactions()
@@ -1006,18 +1237,20 @@ function getMyTransactions(role) {
 
 function renderPersonalHistory(role) {
   const tableId = role + "-history-table";
-  const list = getMyTransactions(role);
+  const list = getMyTransactions();
 
-  $(tableId).innerHTML = list.length ? list.map(t => `
-    <tr>
-      <td>${escapeHTML(getItemName(t.itemId))}</td>
-      <td>${Number(t.quantity)}</td>
-      <td>${escapeHTML(t.borrowDate || "-")}</td>
-      <td>${escapeHTML(t.returnDate || "-")}</td>
-      <td>${escapeHTML(t.actualReturnDate || "-")}</td>
-      <td>${statusBadge(transactionStatus(t))}</td>
-    </tr>
-  `).join("") : `<tr><td colspan="6" class="empty-row">No borrowing history yet.</td></tr>`;
+  $(tableId).innerHTML = list.length
+    ? list.map(t => `
+      <tr>
+        <td>${escapeHTML(getItemName(t.itemId))}</td>
+        <td>${Number(t.quantity)}</td>
+        <td>${escapeHTML(t.borrowDate || "-")}</td>
+        <td>${escapeHTML(t.returnDate || "-")}</td>
+        <td>${escapeHTML(t.actualReturnDate || "-")}</td>
+        <td>${statusBadge(transactionStatus(t))}</td>
+      </tr>
+    `).join("")
+    : `<tr><td colspan="6" class="empty-row">No borrowing history yet.</td></tr>`;
 }
 
 /* ---------- CSV EXPORT ---------- */
@@ -1037,15 +1270,22 @@ function exportTransactions() {
   ];
 
   const csv = rows.map(row =>
-    row.map(value => `"${String(value ?? "").replace(/"/g, '""')}"`).join(",")
+    row.map(value =>
+      `"${String(value ?? "").replace(/"/g, '""')}"`
+    ).join(",")
   ).join("\n");
 
-  const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+  const blob = new Blob(["\uFEFF" + csv], {
+    type: "text/csv;charset=utf-8;"
+  });
+
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
+
   link.href = url;
   link.download = "schoolborrow-transactions.csv";
   link.click();
+
   URL.revokeObjectURL(url);
   showToast("Transaction report exported.");
 }
@@ -1080,6 +1320,7 @@ $("navigation").addEventListener("click", event => {
 
 document.addEventListener("click", event => {
   const goButton = event.target.closest("[data-go]");
+
   if (goButton) {
     navigate(goButton.dataset.go);
     return;
@@ -1100,9 +1341,6 @@ document.addEventListener("click", event => {
     case "delete-borrower":
       deleteBorrower(id);
       break;
-    case "delete-account":
-      deleteAccount(id);
-      break;
     case "return-item":
       returnTransaction(id);
       break;
@@ -1120,15 +1358,18 @@ document.addEventListener("click", event => {
 
 /* ---------- STARTUP ---------- */
 
-initializeData();
-
-if (restoreSession()) {
-  startApplication();
-} else {
+async function initializeApplication() {
   $("login-screen").classList.remove("hidden");
   $("app").classList.add("hidden");
+
+  $("transaction-due").min = today();
+  $("request-date").min = today();
+
+  const restored = await restoreSession();
+
+  if (restored) {
+    startApplication();
+  }
 }
 
-// Set date minimums to today.
-$("transaction-due").min = today();
-$("request-date").min = today();
+initializeApplication();
