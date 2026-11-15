@@ -9,10 +9,6 @@ const SUPABASE_KEY = "sb_publishable_3Xt-YOdM7xXUYMLr8B4t5w_niq7y4g9";
 
 const db = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-const KEYS = {
-  session: "sb_session"
-};
-
 const ADMIN_USERNAME = "admin";
 
 let currentUser = null;
@@ -256,6 +252,7 @@ async function logout() {
 
   currentUser = null;
   currentPage = "";
+
   data = {
     items: [],
     borrowers: [],
@@ -719,6 +716,7 @@ function renderAccounts() {
     : `<tr><td colspan="4" class="empty-row">No student or teacher accounts created yet.</td></tr>`;
 }
 
+/* FIXED ACCOUNT CREATION */
 async function submitAccount(event) {
   event.preventDefault();
 
@@ -745,6 +743,23 @@ async function submitAccount(event) {
   }
 
   try {
+    // Get the current authenticated session
+    const { data: sessionData, error: sessionError } =
+      await db.auth.getSession();
+
+    if (sessionError) throw sessionError;
+
+    const session = sessionData.session;
+
+    if (!session?.access_token) {
+      throw new Error("Your login session has expired. Please log in again.");
+    }
+
+    if (currentUser?.role !== "admin") {
+      throw new Error("Only administrators can create accounts.");
+    }
+
+    // Send the access token explicitly to the Edge Function
     const { data: result, error } = await db.functions.invoke(
       "admin-create-user",
       {
@@ -754,19 +769,43 @@ async function submitAccount(event) {
           full_name: name,
           role,
           contact
+        },
+        headers: {
+          Authorization: `Bearer ${session.access_token}`
         }
       }
     );
 
-    if (error) throw error;
-    if (result?.error) throw new Error(result.error);
+    if (error) {
+      console.error("Edge Function error:", error);
+
+      // Try to display the actual server response
+      let details = error.message;
+
+      if (error.context) {
+        try {
+          const responseBody = await error.context.json();
+          details = responseBody.error || responseBody.message || details;
+        } catch (_) {
+          // Keep the original error message
+        }
+      }
+
+      throw new Error(details || "Could not create account.");
+    }
+
+    if (result?.error) {
+      throw new Error(result.error);
+    }
 
     await refreshData();
     $("account-form").reset();
     renderAccounts();
+
     showToast(`${roleName(role)} account created successfully.`);
 
   } catch (err) {
+    console.error("Account creation failed:", err);
     showError(err, "Could not create account.");
   }
 }
