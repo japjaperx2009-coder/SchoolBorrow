@@ -716,7 +716,8 @@ function renderAccounts() {
     : `<tr><td colspan="4" class="empty-row">No student or teacher accounts created yet.</td></tr>`;
 }
 
-/* FIXED ACCOUNT CREATION */
+/* ---------- ACCOUNT CREATION ---------- */
+
 async function submitAccount(event) {
   event.preventDefault();
 
@@ -743,7 +744,7 @@ async function submitAccount(event) {
   }
 
   try {
-    // Get the current authenticated session
+    // Get the current authenticated session.
     const { data: sessionData, error: sessionError } =
       await db.auth.getSession();
 
@@ -759,7 +760,7 @@ async function submitAccount(event) {
       throw new Error("Only administrators can create accounts.");
     }
 
-    // Send the access token explicitly to the Edge Function
+    // Send the admin's access token to the Edge Function.
     const { data: result, error } = await db.functions.invoke(
       "admin-create-user",
       {
@@ -779,7 +780,6 @@ async function submitAccount(event) {
     if (error) {
       console.error("Edge Function error:", error);
 
-      // Try to display the actual server response
       let details = error.message;
 
       if (error.context) {
@@ -787,7 +787,7 @@ async function submitAccount(event) {
           const responseBody = await error.context.json();
           details = responseBody.error || responseBody.message || details;
         } catch (_) {
-          // Keep the original error message
+          // Keep the original error message.
         }
       }
 
